@@ -1,77 +1,59 @@
-import requests
-import msal
 import logging
-from typing import List, Dict, Optional
-from src.config.config import Config
 
-logging.basicConfig(level=Config.LOG_LEVEL)
+from src.exchange_client import ExchangeClient
+from src.graph_client import GraphClient
+from src.signatures import personalize, sanitize_html
+
 logger = logging.getLogger(__name__)
 
-class OutlookSignatureManager:
-    def __init__(self):
-        self.tenant_id = Config.TENANT_ID
-        self.client_id = Config.CLIENT_ID
-        self.certificate_path = Config.CERTIFICATE_PATH
-        self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"
-        self.scope = ["https://graph.microsoft.com/.default"]
-        Config.validate_config()
-        
-    def get_access_token(self) -> str:
-        try:
-            app = msal.ConfidentialClientApplication(
-                self.client_id,
-                authority=self.authority,
-                client_credential={"private_key": open(self.certificate_path).read()},
-            )
-            result = app.acquire_token_for_client(scopes=self.scope)
-            if "access_token" in result:
-                return result["access_token"]
-            else:
-                raise Exception(f"Token acquisition failed: {result.get('error_description')}")
-        except Exception as e:
-            raise Exception(f"Error acquiring token: {str(e)}")
-    
-    def get_all_users(self) -> List[Dict]:
-        try:
-            access_token = self.get_access_token()
-            headers = {"Authorization": f"Bearer {access_token}"}
-            url = "https://graph.microsoft.com/v1.0/users?$select=displayName,userPrincipalName,mail,jobTitle,department"
-            users = []
-            
-            while url:
-                response = requests.get(url, headers=headers)
-                if response.status_code == 200:
-                    data = response.json()
-                    users.extend(data.get("value", []))
-                    url = data.get("@odata.nextLink")
-                else:
-                    raise Exception(f"Failed to get users: {response.status_code}")
-            return users
-        except Exception as e:
-            raise Exception(f"Error getting users: {str(e)}")
-    
-    def set_user_signature(self, user_principal_name: str, signature_html: str) -> bool:
-        try:
-            access_token = self.get_access_token()
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
-            url = f"https://graph.microsoft.com/v1.0/users/{user_principal_name}/mailboxSettings"
-            payload = {"signature": {"content": signature_html, "contentType": "html"}}
-            response = requests.patch(url, headers=headers, json=payload)
-            return response.status_code == 200
-        except Exception as e:
-            raise Exception(f"Error setting signature: {str(e)}")
 
-SIGNATURE_TEMPLATES = {
-    "standard": """
-    <html><body>
-    <div style="font-family: Arial, sans-serif; font-size: 10pt;">
-        <p><strong>{{displayName}}</strong><br>
-        {{jobTitle}} | {{department}}</p>
-        <p>📞 {{businessPhones}}<br>✉️ {{mail}}</p>
-    </div>
-    </body></html>
-    """
-}
+class OutlookSignatureManager:
+    """Reads users from Microsoft Graph and writes their Outlook signatures
+    through Exchange Online."""
+
+    def __init__(self, graph: GraphClient | None = None, exchange: ExchangeClient | None = None):
+        self.graph = graph or GraphClient()
+        self.exchange = exchange or ExchangeClient()
+
+    def get_all_users(self) -> list[dict]:
+        return self.graph.get_all_users()
+
+    def get_user_signature(self, user_principal_name: str) -> str:
+        return self.exchange.get_signature(user_principal_name)
+
+    def set_user_signature(self, user_principal_name: str, signature_html: str) -> None:
+        """Set a signature as given (sanitised, not personalised)."""
+        self.exchange.set_signature(user_principal_name, sanitize_html(signature_html))
+
+    def apply_template_to_user(self, user_principal_name: str, template: str) -> str:
+        user = self.graph.get_user(user_principal_name)
+        signature = personalize(template, user)
+        self.exchange.set_signature(user_principal_name, signature)
+        return signature
+
+    def apply_standard_signature_to_all(self, signature_template: str) -> dict:
+        """Personalise the template for every user and write it in batches."""
+        signatures = {}
+        for user in self.graph.get_all_users():
+            upn = user.get("userPrincipalName")
+            # Users without a mailbox will fail in Exchange; those without
+            # a mail address almost never have one, so skip them up front.
+            if upn and user.get("mail"):
+                signatures[upn] = personalize(signature_template, user)
+
+        results = {"success": [], "failed": []}
+        for result in self.exchange.set_signatures(signatures):
+            if result.get("ok"):
+                results["success"].append(result["upn"])
+            else:
+                results["failed"].append({"user": result["upn"], "error": result.get("error")})
+                logger.warning("Signature failed for %s: %s", result["upn"], result.get("error"))
+        logger.info(
+            "Bulk signature update: %d succeeded, %d failed",
+            len(results["success"]), len(results["failed"]),
+        )
+        return results
+
+    def set_automatic_reply(self, user_principal_name: str, message: str,
+                            start_time: str | None = None, end_time: str | None = None) -> None:
+        self.graph.set_automatic_reply(user_principal_name, message, start_time, end_time)

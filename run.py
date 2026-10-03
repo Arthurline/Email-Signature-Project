@@ -1,18 +1,28 @@
-from src.app import app
-from src.config.config import Config
+import logging
+import sys
 
-if __name__ == '__main__':
-    print("=== Outlook Signature Manager ===")
-    print("Starting application...")
-    
+from src.config.config import Config, ConfigError
+
+
+def main() -> int:
+    logging.basicConfig(
+        level=Config.LOG_LEVEL,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     try:
         Config.validate_config()
-        print("✓ Configuration is valid")
-        print("✓ Server starting on http://localhost:5000")
-        print("Press Ctrl+C to stop the server")
-        
-        app.run(debug=Config.DEBUG, host='0.0.0.0', port=5000)
-        
-    except Exception as e:
-        print(f"✗ Error: {str(e)}")
-        print("\nPlease check your .env file configuration")
+    except ConfigError as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        print("Check your .env file (see .env.example).", file=sys.stderr)
+        return 1
+
+    from src.app import create_app
+
+    app = create_app()
+    print(f"Outlook Signature Manager on http://{Config.HOST}:{Config.PORT}")
+    app.run(debug=Config.DEBUG, host=Config.HOST, port=Config.PORT)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

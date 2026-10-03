@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outlook Signature Manager</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>Outlook Signature Manager</h1>
+    <form id="key-form" class="inline">
+      <label for="api-key">API key</label>
+      <input id="api-key" type="password" autocomplete="off" required>
+      <button type="submit">Connect</button>
+    </form>
+  </header>
+
+  <p id="status" role="status"></p>
+
+  <main>
+    <section>
+      <h2>Users</h2>
+      <input id="user-filter" type="search" placeholder="Filter by name or email" disabled>
+      <table>
+        <thead>
+          <tr><th></th><th>Name</th><th>Email</th><th>Job title</th><th>Department</th></tr>
+        </thead>
+        <tbody id="user-rows">
+          <tr><td colspan="5" class="muted">Enter the API key to load users.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Signature</h2>
+      <label for="template-select">Template</label>
+      <select id="template-select">
+        {% for name in templates %}
+        <option value="{{ name }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+
+      <p class="muted">Selected user: <span id="selected-user">none</span></p>
+
+      <div class="actions">
+        <button id="preview-btn" type="button" disabled>Preview</button>
+        <button id="apply-btn" type="button" disabled>Apply to user</button>
+        <button id="apply-all-btn" type="button" class="danger" disabled>Apply to everyone</button>
+      </div>
+
+      <h3>Preview</h3>
+      <iframe id="preview" title="Signature preview" sandbox></iframe>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>
